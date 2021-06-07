@@ -112,6 +112,13 @@ class Backup_page_tracker {
                                                      unsigned char *is_null,
                                                      unsigned char *error);
 
+  static bool page_track_purge_pages_init(UDF_INIT *initid, UDF_ARGS *, char *);
+  static void page_track_purge_pages_deinit(
+      UDF_INIT *initid MY_ATTRIBUTE((unused)));
+  static long long page_track_purge_pages(UDF_INIT *initid, UDF_ARGS *,
+                                          unsigned char *is_null,
+                                          unsigned char *error);
+
   // method to act on a changed backup-id
   static bool backup_id_update();
 

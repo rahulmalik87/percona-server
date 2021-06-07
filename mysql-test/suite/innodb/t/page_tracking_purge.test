@@ -1,0 +1,109 @@
+#test page tracking purge 
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+--source include/count_sessions.inc
+
+LET $MYSQLD_DATADIR = `select @@datadir`;
+SET GLOBAL innodb_monitor_enable = module_log;
+
+DELIMITER |;
+CREATE PROCEDURE prepare_data(IN val INT)
+BEGIN
+  DECLARE i INT DEFAULT 1;
+
+  WHILE i < val DO
+    INSERT INTO t1 (b,c) VALUES (REPEAT(a,600), REPEAT(b,600));
+    INSERT INTO t2 (b,c) VALUES (REPEAT(a,600), REPEAT(b,600));
+    INSERT INTO t3 (b,c) VALUES (REPEAT(a,600), REPEAT(b,600));
+    SET i = i + 1;
+  END WHILE;
+END|
+DELIMITER ;|
+
+--eval INSTALL COMPONENT "file://component_mysqlbackup"
+
+--echo #Case 1 check basic scenario with purge function
+SELECT mysqlbackup_page_track_purge_pages(1);
+SELECT mysqlbackup_page_track_purge_pages("string");
+SELECT mysqlbackup_page_track_purge_pages();
+SELECT mysqlbackup_page_track_purge_pages(1,2);
+
+--echo #Case 2 check if page archive cleans archive file stop lsn
+CREATE TABLE t1 (a INT NOT NULL PRIMARY KEY AUTO_INCREMENT, b LONGBLOB, c
+LONGBLOB);
+CREATE TABLE t2 (a INT NOT NULL PRIMARY KEY AUTO_INCREMENT, b LONGBLOB, c
+LONGBLOB);
+CREATE TABLE t3 (a INT NOT NULL PRIMARY KEY AUTO_INCREMENT, b LONGBLOB, c
+LONGBLOB);
+SELECT mysqlbackup_page_track_set(1);
+CALL prepare_data(100);
+SET GLOBAL innodb_log_checkpoint_now = 1;
+SELECT mysqlbackup_page_track_set(0);
+--source ../include/log_read_current_lsn.inc
+if ($debug_test) {
+	--echo LSN: $current_lsn
+}
+--eval SELECT mysqlbackup_page_track_purge_pages($current_lsn)
+--list_files $MYSQLD_DATADIR/#ib_archive
+
+--echo #Case 3 page archive should not interfare when clone in progress
+
+connect (con1,localhost,root,,);
+connect (con2,localhost,root,,);
+
+--let $CLONE_DATADIR = $MYSQL_TMP_DIR/data_new
+
+--replace_result $CLONE_PLUGIN CLONE_PLUGIN
+--eval INSTALL PLUGIN clone SONAME '$CLONE_PLUGIN'
+--connection con1
+SET DEBUG_SYNC = 'clone_file_copy SIGNAL page_signal WAIT_FOR go_page';
+--source ../../clone/include/clone_command_send.inc
+
+--connection con2
+SET DEBUG_SYNC = 'now WAIT_FOR page_signal';
+CALL prepare_data(100);
+--source ../include/log_read_current_lsn.inc
+if ($debug_test) {
+	--echo LSN: $current_lsn
+}
+--eval SELECT mysqlbackup_page_track_purge_pages($current_lsn)
+SET DEBUG_SYNC = 'now SIGNAL go_page';
+
+--connection con1
+--reap
+
+select count(*) from t1;
+select count(*) from t2;
+select count(*) from t3;
+
+# Restart server on cloned data directory
+--replace_result $CLONE_DATADIR CLONE_DATADIR
+--let restart_parameters="restart: --datadir=$CLONE_DATADIR"
+--source include/restart_mysqld.inc
+
+select count(*) from t1;
+select count(*) from t2;
+select count(*) from t3;
+
+#Cleanup
+--let restart_parameters="restart:"
+--source include/restart_mysqld.inc
+
+--connection con1
+DROP TABLE t1;
+DROP TABLE t2;
+DROP TABLE t3;
+
+SET DEBUG_SYNC = 'RESET';
+
+--force-rmdir $CLONE_DATADIR
+
+DROP PROCEDURE prepare_data;
+
+UNINSTALL PLUGIN clone;
+UNINSTALL COMPONENT "file://component_mysqlbackup";
+
+--disconnect con1
+--disconnect con2
+--disconnect con3
+

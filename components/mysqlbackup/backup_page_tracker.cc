@@ -95,6 +95,12 @@ void Backup_page_tracker::initialize_udf_list() {
       reinterpret_cast<Udf_func_any>(page_track_get_changed_pages),
       reinterpret_cast<Udf_func_init>(page_track_get_changed_pages_init),
       reinterpret_cast<Udf_func_deinit>(page_track_get_changed_pages_deinit)));
+
+  m_udf_list.push_back(new udf_data_t(
+      Backup_comp_constants::udf_purge_pages, INT_RESULT,
+      reinterpret_cast<Udf_func_any>(page_track_purge_pages),
+      reinterpret_cast<Udf_func_init>(page_track_purge_pages_init),
+      reinterpret_cast<Udf_func_deinit>(page_track_purge_pages_deinit)));
 }
 
 /**
@@ -468,4 +474,51 @@ int page_track_callback(MYSQL_THD opaque_thd MY_ATTRIBUTE((unused)),
     return (2);  // interupt an on going transfer
   else
     return (0);
+}
+
+/**
+   Callback function for initialization of UDF
+   "mysqlbackup_page_track_purge_pages".
+
+   @return Status of purge
+   @retval false on success
+   @retval true on failure
+*/
+bool Backup_page_tracker::page_track_purge_pages_init(UDF_INIT *, UDF_ARGS *,
+                                                      char *) {
+  return (false);
+}
+
+/**
+   Callback method for dinitialization of UDF
+   "mysqlbackup_page_track_purge_pages".
+*/
+void Backup_page_tracker::page_track_purge_pages_deinit(
+    UDF_INIT *initid MY_ATTRIBUTE((unused))) {}
+
+/**
+  UDF for "mysqlbackup_page_track_purge_pages"
+  See include/mysql/udf_registration_types.h
+
+  @returns an int status
+ */
+long long Backup_page_tracker::page_track_purge_pages(UDF_INIT *,
+                                                      UDF_ARGS *args,
+                                                      unsigned char *,
+                                                      unsigned char *) {
+  MYSQL_THD thd;
+  if (mysql_service_mysql_current_thread_reader->get(&thd)) {
+    return (-1);
+  }
+
+  if (args->arg_count != 1 || args->arg_type[0] != INT_RESULT) {
+    return (-1);
+  }
+
+  int retval = 0;
+  uint64_t lsn = *((long long *)args->args[0]);
+  retval =
+      mysql_service_mysql_page_track->purge(thd, PAGE_TRACK_SE_INNODB, &lsn);
+  if (retval) return (-1 * retval);
+  return retval;
 }
